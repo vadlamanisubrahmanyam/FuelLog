@@ -14,6 +14,7 @@ export default function App() {
   const [ready, setReady] = useState(false);
   const [screen, setScreen] = useState<Screen>('home');
   const [editing, setEditing] = useState<FuelEntry | null>(null);
+  const [editVid, setEditVid] = useState<string | null>(null);
 
   useEffect(() => { loadDB().then((d) => { setDb(d); setReady(true); }); }, []);
 
@@ -22,6 +23,7 @@ export default function App() {
   const back = useCallback(() => {
     if (screen === 'home') return false;
     setEditing(null);
+    setEditVid(null);
     setScreen('home');
     return true;
   }, [screen]);
@@ -37,7 +39,7 @@ export default function App() {
   const entries = vehicle ? db.entries.filter((e) => e.vehicleId === vehicle.id) : [];
   const needVehicle = (screen === 'add' || screen === 'history' || screen === 'stats') && !vehicle;
 
-  const go = (n: string) => { setEditing(null); setScreen((needVehicle || (!vehicle && n !== 'admin' && n !== 'home')) ? 'admin' : (n as Screen)); };
+  const go = (n: string, vid?: string) => { setEditing(null); setEditVid(vid ?? null); setScreen((needVehicle || (!vehicle && n !== 'admin' && n !== 'home')) ? 'admin' : (n as Screen)); };
 
   const saveEntry = (e: FuelEntry) => {
     const exists = db.entries.some((x) => x.id === e.id);
@@ -65,7 +67,7 @@ export default function App() {
         {screen === 'add' && vehicle && <AddFuel key={editing?.id ?? 'new'} vehicle={vehicle} entries={entries} editing={editing} onSave={saveEntry} onCancel={back} />}
         {screen === 'history' && vehicle && <History vehicle={vehicle} entries={entries} onEdit={(e) => { setEditing(e); setScreen('add'); }} onDelete={(id) => commit({ ...db, entries: db.entries.filter((x) => x.id !== id) })} />}
         {screen === 'stats' && vehicle && <Stats vehicle={vehicle} entries={entries} />}
-        {screen === 'admin' && <Admin db={db} onSaveVehicle={saveVehicle} onDeleteVehicle={deleteVehicle} onRestore={(d) => commit(d)} />}
+        {screen === 'admin' && <Admin key={editVid ?? 'x'} initialEditId={editVid} db={db} onSaveVehicle={saveVehicle} onDeleteVehicle={deleteVehicle} onRestore={(d) => commit(d)} />}
       </View>
     </View>
   );

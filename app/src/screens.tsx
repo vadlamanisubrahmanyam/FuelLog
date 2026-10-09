@@ -10,10 +10,13 @@ const icon = (v: Vehicle) => (v.type === 'car' ? '🚗' : '🏍️');
 const Body = ({ children }: any) => <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: 14 }}>{children}</ScrollView>;
 
 /* ---------------- HOME ---------------- */
-export function Home({ db, vehicle, go, select }: { db: DB; vehicle: Vehicle | null; go: (n: string) => void; select: (id: string) => void }) {
+export function Home({ db, vehicle, go, select }: { db: DB; vehicle: Vehicle | null; go: (n: string, vid?: string) => void; select: (id: string) => void }) {
   const entries = db.entries.filter((e) => vehicle && e.vehicleId === vehicle.id);
   const st = computeStats(entries, todayStr());
   const all = db.entries.reduce((a, e) => a + e.total, 0);
+  const lastOdo = entries.length ? Math.max(...entries.map((e) => e.odo)) : 0;
+  const curOdo = vehicle ? Math.max(vehicle.startOdo ?? 0, lastOdo) : 0;
+  const missing = db.vehicles.filter((v) => v.startOdo == null);
   return (
     <Body>
       {db.vehicles.length === 0 ? (
@@ -24,17 +27,26 @@ export function Home({ db, vehicle, go, select }: { db: DB; vehicle: Vehicle | n
         </Card>
       ) : (
         <>
+          {missing.length > 0 && (
+            <Card style={{ backgroundColor: '#FFF4E5', borderColor: C.accent }}>
+              <Text style={{ fontWeight: '800', color: C.text }}>Initial setup needed</Text>
+              <Text style={{ color: C.sub, marginVertical: 6 }}>Enter the current odometer reading for {missing.map((v) => v.reg).join(', ')} so distance is tracked accurately.</Text>
+              <Btn label={`Set odometer: ${missing[0].reg}`} onPress={() => go('admin', missing[0].id)} />
+            </Card>
+          )}
           <Chips options={db.vehicles.map((v) => ({ key: v.id, label: `${icon(v)} ${v.reg}` }))} value={vehicle?.id ?? null} onChange={select} />
           {vehicle && (
             <Card>
               <Text style={{ fontSize: 18, fontWeight: '800', color: C.text }}>{icon(vehicle)} {vName(vehicle)}</Text>
-              <Text style={{ color: C.sub, marginBottom: 8 }}>{vehicle.reg}</Text>
+              <Text style={{ color: C.sub }}>{vehicle.reg}</Text>
+              <Text style={{ color: C.primaryDark, fontWeight: '700', marginBottom: 8 }}>{vehicle.startOdo != null || entries.length ? `Odometer: ${Math.round(curOdo).toLocaleString('en-IN')} km` : 'Odometer not set'}</Text>
               <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
                 <Stat label="Avg mileage" value={st.avgMileage ? num(st.avgMileage) + ' km/l' : '—'} />
                 <Stat label="Last fill" value={st.lastMileage ? num(st.lastMileage) + ' km/l' : '—'} />
                 <Stat label="This month" value={money(st.monthSpend)} />
                 <Stat label="Total spent" value={money(st.totalSpend)} />
               </View>
+              <Btn kind="ghost" label="✎  Edit vehicle / odometer" onPress={() => go('admin', vehicle.id)} style={{ marginTop: 8, paddingVertical: 10 }} />
             </Card>
           )}
           <Btn label="＋  Add fuel entry" onPress={() => go('add')} style={{ marginBottom: 10 }} />
@@ -88,6 +100,7 @@ export function AddFuel({ vehicle, entries, editing, onSave, onCancel }: { vehic
     const prev = [...others].filter((e) => e.date <= date).pop();
     const next = others.find((e) => e.date > date);
     if (prev && o <= prev.odo) return Alert.alert('Odometer too low', `Previous entry (${prev.date}) was ${prev.odo} km. Reading must be higher.`);
+    if (vehicle.startOdo != null && o < vehicle.startOdo) return Alert.alert('Odometer too low', `This vehicle was set up at ${vehicle.startOdo} km. Reading cannot be lower.`);
     if (next && o >= next.odo) return Alert.alert('Odometer too high', `A later entry (${next.date}) is ${next.odo} km. Reading must be lower.`);
     const now = Date.now();
     onSave({
@@ -106,7 +119,7 @@ export function AddFuel({ vehicle, entries, editing, onSave, onCancel }: { vehic
         <Btn kind="ghost" label="Today" onPress={() => setDate(todayStr())} style={{ flex: 1, marginRight: 6, paddingVertical: 8 }} />
         <Btn kind="ghost" label="+ Day" onPress={() => setDate(addDays(validDate(date) ? date : todayStr(), 1))} style={{ flex: 1, paddingVertical: 8 }} />
       </View>
-      <Field label="Odometer (km)" value={odo} onChangeText={setOdo} keyboardType="decimal-pad" hint={last ? `Last reading: ${last.odo} km` : 'First entry for this vehicle'} />
+      <Field label="Odometer (km)" value={odo} onChangeText={setOdo} keyboardType="decimal-pad" hint={last ? `Last reading: ${last.odo} km` : vehicle.startOdo != null ? `Odometer at setup: ${vehicle.startOdo} km` : 'First entry for this vehicle'} />
       <Text style={s.label}>Fuel type</Text>
       <Chips options={FUEL_TYPES.map((f) => ({ key: f, label: f }))} value={fuelType} onChange={(k) => setFuelType(k as FuelType)} />
       <Field label={`Quantity (${unit})`} value={qty} onChangeText={onQty} keyboardType="decimal-pad" />
@@ -196,24 +209,31 @@ export function Stats({ vehicle, entries }: { vehicle: Vehicle; entries: FuelEnt
 }
 
 /* ---------------- ADMIN ---------------- */
-export function Admin({ db, onSaveVehicle, onDeleteVehicle, onRestore }: { db: DB; onSaveVehicle: (v: Vehicle) => void; onDeleteVehicle: (id: string) => void; onRestore: (d: DB) => void }) {
-  const [editing, setEditing] = useState<Vehicle | null>(null);
-  const [type, setType] = useState<'car' | 'bike'>('car');
-  const [make, setMake] = useState('');
-  const [model, setModel] = useState('');
-  const [reg, setReg] = useState('');
+export function Admin({ db, initialEditId, onSaveVehicle, onDeleteVehicle, onRestore }: { db: DB; initialEditId?: string | null; onSaveVehicle: (v: Vehicle) => void; onDeleteVehicle: (id: string) => void; onRestore: (d: DB) => void }) {
+  const init = db.vehicles.find((v) => v.id === initialEditId) ?? null;
+  const [editing, setEditing] = useState<Vehicle | null>(init);
+  const [type, setType] = useState<'car' | 'bike'>(init?.type ?? 'car');
+  const [make, setMake] = useState(init?.make ?? '');
+  const [model, setModel] = useState(init?.model ?? '');
+  const [reg, setReg] = useState(init?.reg ?? '');
+  const [odoStr, setOdoStr] = useState(init?.startOdo != null ? String(init.startOdo) : '');
   const [restoreText, setRestoreText] = useState('');
   const [showRestore, setShowRestore] = useState(false);
 
-  const reset = () => { setEditing(null); setType('car'); setMake(''); setModel(''); setReg(''); };
-  const startEdit = (v: Vehicle) => { setEditing(v); setType(v.type); setMake(v.make); setModel(v.model); setReg(v.reg); };
+  const reset = () => { setEditing(null); setType('car'); setMake(''); setModel(''); setReg(''); setOdoStr(''); };
+  const startEdit = (v: Vehicle) => { setEditing(v); setType(v.type); setMake(v.make); setModel(v.model); setReg(v.reg); setOdoStr(v.startOdo != null ? String(v.startOdo) : ''); };
 
   const save = () => {
     const r = reg.trim().toUpperCase().replace(/\s+/g, ' ');
     if (!make.trim() || !model.trim() || !r) return Alert.alert('Missing details', 'Make, model and registration number are required.');
     if (db.vehicles.some((v) => v.reg === r && v.id !== editing?.id)) return Alert.alert('Already added', 'A vehicle with this registration number exists.');
+    const o = parseFloat(odoStr);
+    if (odoStr.trim() === '' || !(o >= 0)) return Alert.alert('Current odometer needed', 'Enter the odometer reading shown on the vehicle today (km).');
+    const mine = db.entries.filter((e) => e.vehicleId === editing?.id);
+    const minEntry = mine.length ? Math.min(...mine.map((e) => e.odo)) : null;
+    if (minEntry !== null && o > minEntry) return Alert.alert('Odometer too high', `Existing fuel entries start at ${minEntry} km. The setup reading cannot be above that.`);
     const now = Date.now();
-    onSaveVehicle({ id: editing?.id ?? uid(), type, make: make.trim(), model: model.trim(), reg: r, createdAt: editing?.createdAt ?? now, updatedAt: now });
+    onSaveVehicle({ id: editing?.id ?? uid(), type, make: make.trim(), model: model.trim(), reg: r, startOdo: o, startOdoDate: editing && editing.startOdo === o && editing.startOdoDate ? editing.startOdoDate : todayStr(), createdAt: editing?.createdAt ?? now, updatedAt: now });
     reset();
   };
 
@@ -232,10 +252,12 @@ export function Admin({ db, onSaveVehicle, onDeleteVehicle, onRestore }: { db: D
     <Body>
       <Card>
         <Text style={{ fontWeight: '800', color: C.text, marginBottom: 8 }}>{editing ? 'Edit vehicle' : 'Add vehicle'}</Text>
+        {!editing && db.vehicles.length === 0 && <Text style={s.hint}>Initial setup: add each vehicle with its current odometer reading.</Text>}
         <Chips options={[{ key: 'car', label: '🚗 Car' }, { key: 'bike', label: '🏍️ Bike' }]} value={type} onChange={(k) => setType(k as any)} />
         <Field label="Make" value={make} onChangeText={setMake} placeholder="e.g. Honda" />
         <Field label="Model" value={model} onChangeText={setModel} placeholder="e.g. City / Activa" />
         <Field label="Registration number" value={reg} onChangeText={setReg} placeholder="e.g. TS09AB1234" autoCap="characters" />
+        <Field label="Current odometer (km)" value={odoStr} onChangeText={setOdoStr} keyboardType="decimal-pad" placeholder="e.g. 41250" hint="Reading on the dashboard today. Fuel entries must be at or above this." />
         <Btn label={editing ? 'Update vehicle' : 'Add vehicle'} onPress={save} style={{ marginBottom: editing ? 8 : 0 }} />
         {editing && <Btn kind="ghost" label="Cancel edit" onPress={reset} />}
       </Card>
@@ -245,6 +267,7 @@ export function Admin({ db, onSaveVehicle, onDeleteVehicle, onRestore }: { db: D
         <Card key={v.id}>
           <Text style={{ fontWeight: '800', color: C.text, fontSize: 16 }}>{icon(v)} {vName(v)}</Text>
           <Text style={{ color: C.sub, marginBottom: 8 }}>{v.reg} · {db.entries.filter((e) => e.vehicleId === v.id).length} entries</Text>
+          <Text style={{ color: v.startOdo != null ? C.sub : C.danger, marginBottom: 8, marginTop: -6 }}>{v.startOdo != null ? `Odometer at setup: ${v.startOdo} km (${v.startOdoDate ?? ''})` : '⚠ Odometer not set — tap Edit'}</Text>
           <View style={{ flexDirection: 'row' }}>
             <Btn kind="ghost" label="Edit" onPress={() => startEdit(v)} style={{ flex: 1, marginRight: 8, paddingVertical: 10 }} />
             <Btn kind="danger" label="Delete" onPress={() => confirmDelete(v)} style={{ flex: 1, paddingVertical: 10 }} />

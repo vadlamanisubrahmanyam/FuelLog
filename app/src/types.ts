@@ -8,6 +8,8 @@ export interface Vehicle {
   make: string;
   model: string;
   reg: string;
+  startOdo?: number;      // odometer reading entered at initial setup (km)
+  startOdoDate?: string;  // date the setup reading was recorded
   createdAt: number;
   updatedAt: number;
 }
