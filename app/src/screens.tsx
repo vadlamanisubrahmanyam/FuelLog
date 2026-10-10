@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
-import { View, Text, ScrollView, Alert, Share, TouchableOpacity, Switch } from 'react-native';
+import { View, Text, ScrollView, Alert, Share, TouchableOpacity, Switch, Modal, ActivityIndicator } from 'react-native';
+import { captureText, odometerCandidates, amountCandidates } from './ocr';
 import { Vehicle, FuelEntry, FuelType, FUEL_TYPES, DB } from './types';
 import { Btn, Card, Chips, Field, Stat, C, s, Credit } from './ui';
 import { computeStats, monthlySpend, sortEntries, todayStr, addDays, validDate, money, num } from './calc';
@@ -63,6 +64,44 @@ export function Home({ db, vehicle, go, select }: { db: DB; vehicle: Vehicle | n
   );
 }
 
+/* ---------------- SCAN RESULT SHEET ---------------- */
+type Scan = { mode: 'odo' | 'fuel'; values: number[]; text: string } | null;
+function ScanSheet({ scan, onClose, onOdo, onField }: { scan: Scan; onClose: () => void; onOdo: (n: number) => void; onField: (f: 'price' | 'qty' | 'total', n: number) => void }) {
+  const [sel, setSel] = useState<number | null>(null);
+  if (!scan) return null;
+  const close = () => { setSel(null); onClose(); };
+  return (
+    <Modal transparent animationType="slide" onRequestClose={close}>
+      <View style={{ flex: 1, backgroundColor: '#0008', justifyContent: 'flex-end' }}>
+        <View style={{ backgroundColor: '#fff', borderTopLeftRadius: 18, borderTopRightRadius: 18, padding: 16, maxHeight: '80%' }}>
+          <Text style={{ fontSize: 17, fontWeight: '800', color: C.text }}>{scan.mode === 'odo' ? 'Odometer reading found' : 'Numbers found on pump / bill'}</Text>
+          <Text style={s.hint}>{scan.mode === 'odo' ? 'Tap the correct reading.' : 'Tap a number, then choose what it is.'}</Text>
+          <ScrollView style={{ marginVertical: 10 }}>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
+              {scan.values.map((n) => (
+                <TouchableOpacity key={n} onPress={() => (scan.mode === 'odo' ? (onOdo(n), close()) : setSel(n))} style={[s.chip, sel === n && { backgroundColor: C.primary, borderColor: C.primary }]}>
+                  <Text style={{ color: sel === n ? '#fff' : C.text, fontWeight: '800', fontSize: 18 }}>{n}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            {scan.mode === 'fuel' && sel !== null && (
+              <View style={{ marginTop: 6 }}>
+                <Text style={{ color: C.sub, marginBottom: 6 }}>Use {sel} as:</Text>
+                <View style={{ flexDirection: 'row' }}>
+                  <Btn kind="ghost" label="Price/unit" onPress={() => { onField('price', sel); setSel(null); }} style={{ flex: 1, marginRight: 6, paddingVertical: 10 }} />
+                  <Btn kind="ghost" label="Quantity" onPress={() => { onField('qty', sel); setSel(null); }} style={{ flex: 1, marginRight: 6, paddingVertical: 10 }} />
+                  <Btn kind="ghost" label="Amount" onPress={() => { onField('total', sel); setSel(null); }} style={{ flex: 1, paddingVertical: 10 }} />
+                </View>
+              </View>
+            )}
+          </ScrollView>
+          <Btn label="Done" onPress={close} />
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 /* ---------------- ADD / EDIT FUEL ---------------- */
 export function AddFuel({ vehicle, entries, editing, onSave, onCancel }: { vehicle: Vehicle; entries: FuelEntry[]; editing?: FuelEntry | null; onSave: (e: FuelEntry) => void; onCancel: () => void }) {
   const sorted = sortEntries(entries);
@@ -77,6 +116,21 @@ export function AddFuel({ vehicle, entries, editing, onSave, onCancel }: { vehic
   const [station, setStation] = useState(editing?.station ?? '');
   const [notes, setNotes] = useState(editing?.notes ?? '');
   const unit = fuelType === 'CNG' ? 'kg' : 'litres';
+  const [scan, setScan] = useState<Scan>(null);
+  const [busy, setBusy] = useState(false);
+
+  const runScan = async (mode: 'odo' | 'fuel') => {
+    setBusy(true);
+    try {
+      const text = await captureText();
+      if (text === null) return;
+      const values = mode === 'odo' ? odometerCandidates(text, last?.odo ?? vehicle.startOdo ?? 0) : amountCandidates(text);
+      if (values.length === 0) return Alert.alert('No numbers found', 'Move closer, avoid glare, and crop tightly around the digits. You can also type the value.');
+      setScan({ mode, values, text });
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const recalcTotal = (q: string, p: string) => {
     const a = parseFloat(q), b = parseFloat(p);
@@ -120,9 +174,11 @@ export function AddFuel({ vehicle, entries, editing, onSave, onCancel }: { vehic
         <Btn kind="ghost" label="+ Day" onPress={() => setDate(addDays(validDate(date) ? date : todayStr(), 1))} style={{ flex: 1, paddingVertical: 8 }} />
       </View>
       <Field label="Odometer (km)" value={odo} onChangeText={setOdo} keyboardType="decimal-pad" hint={last ? `Last reading: ${last.odo} km` : vehicle.startOdo != null ? `Odometer at setup: ${vehicle.startOdo} km` : 'First entry for this vehicle'} />
+      <Btn kind="ghost" label="📷  Scan odometer" onPress={() => runScan('odo')} disabled={busy} style={{ marginTop: -4, marginBottom: 12, paddingVertical: 10 }} />
       <Text style={s.label}>Fuel type</Text>
       <Chips options={FUEL_TYPES.map((f) => ({ key: f, label: f }))} value={fuelType} onChange={(k) => setFuelType(k as FuelType)} />
       <Field label={`Quantity (${unit})`} value={qty} onChangeText={onQty} keyboardType="decimal-pad" />
+      <Btn kind="ghost" label="📷  Scan price / pump display" onPress={() => runScan('fuel')} disabled={busy} style={{ marginBottom: 12, paddingVertical: 10 }} />
       <Field label={`Price per ${unit === 'kg' ? 'kg' : 'litre'} (₹)`} value={price} onChangeText={onPrice} keyboardType="decimal-pad" />
       <Field label="Total amount (₹)" value={total} onChangeText={onTotal} keyboardType="decimal-pad" hint="Auto-calculated; edit to match your bill" />
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
@@ -136,6 +192,8 @@ export function AddFuel({ vehicle, entries, editing, onSave, onCancel }: { vehic
       <Field label="Notes (optional)" value={notes} onChangeText={setNotes} multiline />
       <Btn label={editing ? 'Save changes' : 'Save entry'} onPress={save} style={{ marginBottom: 10 }} />
       <Btn kind="ghost" label="Cancel" onPress={onCancel} />
+      {busy && <ActivityIndicator color={C.primary} style={{ marginTop: 12 }} />}
+      <ScanSheet scan={scan} onClose={() => setScan(null)} onOdo={(n) => setOdo(String(n))} onField={(f, n) => (f === 'price' ? onPrice(String(n)) : f === 'qty' ? onQty(String(n)) : onTotal(String(n)))} />
     </Body>
   );
 }

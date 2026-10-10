@@ -19,6 +19,16 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#1565C0"
       }
-    }
+    },
+    "plugins": [
+      [
+        "expo-image-picker",
+        {
+          "cameraPermission": "FuelLog uses the camera to read the odometer and fuel price.",
+          "microphonePermission": false,
+          "photosPermission": false
+        }
+      ]
+    ]
   }
 }
